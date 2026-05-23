@@ -24,6 +24,7 @@ export default class BlackboxConfigureSlipway extends Command {
     "reuse-dek-from": Flags.string({ description: "Saved Blackbox sink or profile name whose local DEK should be reused." }),
     "dek-env": Flags.string({ description: "Environment variable containing an existing base64url Blackbox log DEK." }),
     "rotate-dek": Flags.boolean({ description: "Generate a fresh profile DEK instead of reusing a saved profile DEK." }),
+    "rotate-factory-token": Flags.boolean({ description: "Rotate the Blackbox sink factory token to recover a lost local profile state file." }),
     "dry-run": Flags.boolean({ description: "Resolve context and print planned actions without writing Blackbox, Lockbox, or Slipway state." }),
     json: jsonFlag
   };

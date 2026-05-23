@@ -52,6 +52,28 @@ directly to Lockbox, and records only redacted profile metadata back to
 Slipway. Slipway can then ask Lockbox to materialize per-job
 `BLACKBOX_LOG_CONFIG` secrets during automated launches.
 
+If the local Blackbox state file is lost after a profile has already been
+created, the old DEK cannot be recovered from Blackbox. Reconfigure future
+launches by rotating the sink factory token and uploading a replacement
+Lockbox profile:
+
+```fish
+proof blackbox configure-slipway switchboard-validator \
+  --slipway-url https://slipway.fly.dev \
+  --lockbox-url https://lockbox.fly.dev \
+  --rotate-factory-token \
+  --json
+```
+
+After Slipway materializes a per-job profile sink, use the sink id from the
+Slipway `blackbox.configure` plan item or execution record with the saved
+profile DEK:
+
+```fish
+proof blackbox read --name switchboard-validator --sink-id slipway-bbx-... --json
+proof blackbox tail --name switchboard-validator --sink-id slipway-bbx-... --timeout-ms 60000
+```
+
 ## State And Trust Boundary
 
 State is stored in `--state-file` or `BLACKBOX_HOME/keys.json`, defaulting to

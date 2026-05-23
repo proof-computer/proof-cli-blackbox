@@ -694,11 +694,34 @@ async function configureSlipwayProfileCommand(input: {
     cwd: input.cwd,
     currentProfile
   });
+  await ensureKeysFileWritable(input.parsed.flags, input.env);
   const factory = await ensureConfigureSlipwaySinkFactory({
     context,
     signer,
     currentProfile,
+    rotateFactoryToken: boolFlag(input.parsed.flags, "rotate-factory-token"),
     fetchImpl: input.fetchImpl
+  });
+  const configuredAt = nowIso(input.options);
+  const pendingProfileState: SavedBlackboxProfileState = {
+    ...currentProfile,
+    name,
+    applicationId: input.applicationId,
+    repository: context.repository,
+    policyDigest: context.policyDigest,
+    profileId: context.blackbox.profileId,
+    baseUrl: context.blackbox.baseUrl,
+    owner: signer.publicKeyHex,
+    dek,
+    factoryId: context.blackbox.factoryId,
+    factoryToken: factory.factoryToken,
+    configuredAt
+  };
+  await saveProfileState({
+    name,
+    state: pendingProfileState,
+    flags: input.parsed.flags,
+    env: input.env
   });
   const lockboxTokenEnv = stringFlag(input.parsed.flags, "lockbox-token-env") ?? "PROOF_LOCKBOX_OPERATOR_UPLOAD_TOKEN";
   const lockbox = await fetchJson<LockboxOperatorProfileUploadResponse>(lockboxUrl, {
@@ -750,21 +773,10 @@ async function configureSlipwayProfileCommand(input: {
   await saveProfileState({
     name,
     state: {
-      ...currentProfile,
-      name,
-      applicationId: input.applicationId,
-      repository: context.repository,
-      policyDigest: context.policyDigest,
-      profileId: context.blackbox.profileId,
+      ...pendingProfileState,
       revision: lockbox.profile.revision,
-      baseUrl: context.blackbox.baseUrl,
-      owner: signer.publicKeyHex,
-      dek,
-      factoryId: context.blackbox.factoryId,
-      factoryToken: factory.factoryToken,
       factoryTokenDigest: lockbox.profile.blackbox.factoryTokenDigest,
-      lockboxProfileRevision: lockbox.profile.revision,
-      configuredAt: nowIso(input.options)
+      lockboxProfileRevision: lockbox.profile.revision
     },
     flags: input.parsed.flags,
     env: input.env
@@ -790,6 +802,11 @@ async function configureSlipwayProfileCommand(input: {
     lockbox: {
       replayed: Boolean(lockbox.replayed),
       profileRevision: lockbox.profile.revision
+    },
+    localState: {
+      name,
+      factoryTokenSource: factory.tokenSource,
+      factoryTokenRotated: factory.tokenSource === "rotated"
     },
     slipway: record
   }, `Configured reusable Blackbox profile ${lockbox.profile.profileId} for ${input.applicationId}`);
@@ -938,10 +955,12 @@ async function readerContext(parsed: ParsedArgs, options: BlackboxCliOptions): P
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const fetchImpl = options.fetchImpl ?? fetch;
-  const state = await maybeLoadSinkState(cwd, stateName(parsed.flags), parsed.flags, env);
-  const baseUrl = await resolveBlackboxCliBaseUrl({ flags: parsed.flags, env, cwd, state, fetchImpl });
+  const name = stateName(parsed.flags);
+  const state = await maybeLoadSinkState(cwd, name, parsed.flags, env);
+  const profile = state ? undefined : await maybeLoadProfileState(name, parsed.flags, env);
+  const baseUrl = await resolveBlackboxCliBaseUrl({ flags: parsed.flags, env, cwd, state: state ?? profile, fetchImpl });
   const sinkId = resolveSinkId(parsed.flags, state);
-  const dek = resolveDek(parsed.flags, env, state);
+  const dek = resolveDek(parsed.flags, env, state ?? profile);
   const readToken = resolveReadToken(parsed.flags, env, state);
   const signer = readToken ? undefined : await ownerSigner(parsed.flags, env);
   return {
@@ -960,7 +979,7 @@ export async function resolveBlackboxCliBaseUrl(input: {
   flags: Map<string, string | boolean | string[]>;
   env: NodeJS.ProcessEnv;
   cwd: string;
-  state?: SavedBlackboxSinkState;
+  state?: { baseUrl?: string };
   fetchImpl?: typeof fetch;
 }): Promise<string> {
   const explicit = stringFlag(input.flags, "base-url") ?? input.env.BLACKBOX_BASE_URL ?? input.state?.baseUrl;
@@ -1112,8 +1131,9 @@ async function ensureConfigureSlipwaySinkFactory(input: {
   context: SlipwayProfileConfigureContext;
   signer: BlackboxRequestSigner;
   currentProfile?: SavedBlackboxProfileState;
+  rotateFactoryToken: boolean;
   fetchImpl: typeof fetch;
-}): Promise<{ factoryToken: string }> {
+}): Promise<{ factoryToken: string; tokenSource: "created" | "local-state" | "rotated" }> {
   const response = await signedJson<{
     replayed?: boolean;
     factory?: {
@@ -1155,9 +1175,36 @@ async function ensureConfigureSlipwaySinkFactory(input: {
       : undefined
   );
   if (!token) {
-    throw new Error("Blackbox sink factory already exists but no local factory token is saved; rerun from the original BLACKBOX_HOME/state-file or create a new profileId");
+    if (input.rotateFactoryToken) {
+      const rotated = await signedJson<{
+        factory?: {
+          factoryId?: string;
+          owner?: string;
+          applicationId?: string;
+        };
+        factoryToken?: string;
+        rotated?: boolean;
+      }>({
+        baseUrl: input.context.blackbox.baseUrl,
+        path: `/v1/sink-factories/${encodeURIComponent(input.context.blackbox.factoryId)}/token-rotations`,
+        method: "POST",
+        signer: input.signer,
+        fetchImpl: input.fetchImpl
+      });
+      if (
+        rotated.factory?.factoryId !== input.context.blackbox.factoryId ||
+        rotated.factory.applicationId !== input.context.applicationId ||
+        normalizePublicKeyHex(String(rotated.factory.owner ?? "")) !== normalizePublicKeyHex(input.signer.publicKeyHex) ||
+        typeof rotated.factoryToken !== "string" ||
+        rotated.factoryToken.length === 0
+      ) {
+        throw new Error("Blackbox sink factory token rotation response does not match the Slipway profile binding");
+      }
+      return { factoryToken: rotated.factoryToken, tokenSource: "rotated" };
+    }
+    throw new Error("Blackbox sink factory already exists but no local factory token is saved. Rerun from the original BLACKBOX_HOME/state-file, or rerun with --rotate-factory-token to recover future Slipway launches by rotating the factory token and uploading a replacement Lockbox profile. Existing logs remain readable only with the original DEK.");
   }
-  return { factoryToken: token };
+  return { factoryToken: token, tokenSource: response.factoryToken ? "created" : "local-state" };
 }
 
 function validateConfigureSlipwaySink(
@@ -1404,7 +1451,7 @@ function resolveSinkId(flags: Map<string, string | boolean | string[]>, state: S
 function resolveDek(
   flags: Map<string, string | boolean | string[]>,
   env: NodeJS.ProcessEnv,
-  state: SavedBlackboxSinkState | undefined
+  state: { dek?: string } | undefined
 ): string {
   const envName = stringFlag(flags, "dek-env");
   if (envName) return requiredEnv(env, envName);
@@ -1482,6 +1529,19 @@ async function saveProfileState(input: {
   existing.version = 1;
   existing.profiles = existing.profiles ?? {};
   existing.profiles[input.name] = input.state;
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(existing, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(file, 0o600);
+}
+
+async function ensureKeysFileWritable(
+  flags: Map<string, string | boolean | string[]>,
+  env: NodeJS.ProcessEnv
+): Promise<void> {
+  const file = stateFilePath(flags, env);
+  const existing = await maybeLoadKeysFile(flags, env) ?? { version: 1, sinks: {}, profiles: {} };
+  existing.version = 1;
+  existing.profiles = existing.profiles ?? {};
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify(existing, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await chmod(file, 0o600);

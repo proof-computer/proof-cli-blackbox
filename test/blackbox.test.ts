@@ -408,6 +408,171 @@ describe("proof-cli Blackbox runner", () => {
     assert.match(saved.profiles?.validator?.factoryToken ?? "", /^bbx_sf_validator_/);
     assert.equal(saved.profiles?.validator?.lockboxProfileRevision, `sha256:${"4".repeat(64)}`);
   });
+
+  it("keeps local profile decrypt material when Lockbox profile upload fails", async (t) => {
+    const harness = await createHarness(t);
+    const sessionFile = path.join(harness.dir, "ops-session.json");
+    const dek = fixedDek();
+    await writeFile(sessionFile, `${JSON.stringify({
+      slipwayUrl: "https://slipway.test",
+      sessionToken: "slipway-session-token"
+    })}\n`);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+      const method = init?.method ?? "GET";
+      if (url.hostname === "slipway.test" && method === "GET" && url.pathname === "/api/applications/validator/blackbox/configure-slipway-context") {
+        return jsonResponse(profileConfigureContext(harness.baseUrl));
+      }
+      if (url.hostname === "lockbox.test" && method === "POST" && url.pathname === "/api/operator/blackbox-profiles") {
+        return jsonResponse({ ok: false, error: "test_lockbox_failure" }, 500);
+      }
+      return harness.fetchImpl(input, init);
+    };
+
+    await assert.rejects(
+      () => runBlackboxCli([
+        "configure-slipway",
+        "validator",
+        "--slipway-config-file",
+        sessionFile,
+        "--dek-env",
+        "BLACKBOX_TEST_DEK",
+        "--json"
+      ], {
+        cwd: harness.dir,
+        env: {
+          ...harness.env,
+          BLACKBOX_TEST_DEK: dek,
+          PROOF_LOCKBOX_OPERATOR_UPLOAD_TOKEN: "lockbox-operator-token"
+        },
+        fetchImpl
+      }),
+      /test_lockbox_failure/u
+    );
+
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "home", "keys.json"), "utf8")) as {
+      profiles?: Record<string, { dek?: string; factoryToken?: string; lockboxProfileRevision?: string }>;
+    };
+    assert.equal(saved.profiles?.validator?.dek, dek);
+    assert.match(saved.profiles?.validator?.factoryToken ?? "", /^bbx_sf_validator_/);
+    assert.equal(saved.profiles?.validator?.lockboxProfileRevision, undefined);
+  });
+
+  it("rotates a Slipway profile factory token when recovering lost local state", async (t) => {
+    const harness = await createHarness(t);
+    const sessionFile = path.join(harness.dir, "ops-session.json");
+    const dek = fixedDek();
+    await writeFile(sessionFile, `${JSON.stringify({
+      slipwayUrl: "https://slipway.test",
+      sessionToken: "slipway-session-token"
+    })}\n`);
+    const requests: Array<{ method: string; path: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+      const method = init?.method ?? "GET";
+      requests.push({ method, path: url.pathname });
+      if (url.hostname === "slipway.test" && method === "GET" && url.pathname === "/api/applications/validator/blackbox/configure-slipway-context") {
+        return jsonResponse(profileConfigureContext(harness.baseUrl));
+      }
+      if (url.hostname === "blackbox.test" && method === "POST" && url.pathname === "/v1/sink-factories") {
+        return jsonResponse({
+          replayed: true,
+          factory: {
+            factoryId: "validator",
+            owner: ownerPublicKeyHex,
+            applicationId: "validator",
+            network: "acurast-mainnet",
+            sinkIdPrefix: "slipway-bbx-"
+          }
+        });
+      }
+      if (url.hostname === "blackbox.test" && method === "POST" && url.pathname === "/v1/sink-factories/validator/token-rotations") {
+        return jsonResponse({
+          rotated: true,
+          factory: {
+            factoryId: "validator",
+            owner: ownerPublicKeyHex,
+            applicationId: "validator"
+          },
+          factoryToken: `bbx_sf_validator_${"r".repeat(48)}`
+        });
+      }
+      if (url.hostname === "lockbox.test" && method === "POST" && url.pathname === "/api/operator/blackbox-profiles") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { blackbox?: { factoryToken?: string; dek?: string } };
+        assert.equal(body.blackbox?.factoryToken, `bbx_sf_validator_${"r".repeat(48)}`);
+        assert.equal(body.blackbox?.dek, dek);
+        return jsonResponse(lockboxProfileUploadResponse(harness.baseUrl, ownerPublicKeyHex));
+      }
+      if (url.hostname === "slipway.test" && method === "POST" && url.pathname === "/api/applications/validator/blackbox/configure-slipway-profile-record") {
+        return jsonResponse({ ok: true, profile: { profileId: "validator", revision: `sha256:${"4".repeat(64)}` } });
+      }
+      return harness.fetchImpl(input, init);
+    };
+
+    const lines: string[] = [];
+    await runBlackboxCli([
+      "configure-slipway",
+      "validator",
+      "--slipway-config-file",
+      sessionFile,
+      "--dek-env",
+      "BLACKBOX_TEST_DEK",
+      "--rotate-factory-token",
+      "--json"
+    ], {
+      cwd: harness.dir,
+      env: {
+        ...harness.env,
+        BLACKBOX_TEST_DEK: dek,
+        PROOF_LOCKBOX_OPERATOR_UPLOAD_TOKEN: "lockbox-operator-token"
+      },
+      fetchImpl,
+      stdout: (line) => lines.push(line)
+    });
+
+    const outputText = lines.join("\n");
+    assert.equal(outputText.includes(dek), false);
+    assert.equal(outputText.includes("bbx_sf_validator_"), false);
+    const parsed = JSON.parse(outputText) as { localState?: { factoryTokenRotated?: boolean; factoryTokenSource?: string } };
+    assert.equal(parsed.localState?.factoryTokenRotated, true);
+    assert.equal(parsed.localState?.factoryTokenSource, "rotated");
+    assert.equal(requests.some((request) => request.path === "/v1/sink-factories/validator/token-rotations"), true);
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "home", "keys.json"), "utf8")) as {
+      profiles?: Record<string, { dek?: string; factoryToken?: string; lockboxProfileRevision?: string }>;
+    };
+    assert.equal(saved.profiles?.validator?.dek, dek);
+    assert.equal(saved.profiles?.validator?.factoryToken, `bbx_sf_validator_${"r".repeat(48)}`);
+    assert.equal(saved.profiles?.validator?.lockboxProfileRevision, `sha256:${"4".repeat(64)}`);
+  });
+
+  it("reads profile-created sinks with a saved profile DEK and explicit sink id", async (t) => {
+    const harness = await createHarness(t);
+    const dek = fixedDek();
+    harness.batch = makeBatch(dek);
+    await mkdir(path.join(harness.dir, "home"), { recursive: true });
+    await writeFile(path.join(harness.dir, "home", "keys.json"), `${JSON.stringify({
+      version: 1,
+      sinks: {},
+      profiles: {
+        validator: {
+          name: "validator",
+          applicationId: "validator",
+          repository: "proof-computer/switchboard-validator",
+          policyDigest: "a".repeat(64),
+          profileId: "validator",
+          baseUrl: harness.baseUrl,
+          owner: ownerPublicKeyHex,
+          dek,
+          factoryId: "validator",
+          factoryToken: `bbx_sf_validator_${"a".repeat(48)}`,
+          configuredAt: new Date(0).toISOString()
+        }
+      }
+    }, null, 2)}\n`);
+
+    const read = await runJson(harness, ["read", "--name", "validator", "--sink-id", "sink-1"]) as { batches: Array<{ records: Array<{ event: string }> }> };
+    assert.equal(read.batches[0]?.records[0]?.event, "boot");
+  });
 });
 
 describe("proof-cli Blackbox oclif help", () => {
@@ -688,6 +853,67 @@ function encryptRecord(key: string, value: unknown) {
 
 function fixedDek(): string {
   return Buffer.alloc(32, 9).toString("base64url");
+}
+
+function profileConfigureContext(baseUrl: string): Record<string, unknown> {
+  return {
+    ok: true,
+    context: {
+      domain: "proof.slipway.blackbox.configure-slipway-context.v1",
+      mode: "profile",
+      applicationId: "validator",
+      repository: "proof-computer/switchboard-validator",
+      policyDigest: "a".repeat(64),
+      blackbox: {
+        profileId: "validator",
+        profileName: "validator",
+        sinkName: "validator",
+        baseUrl,
+        network: "acurast-mainnet",
+        sinkIdPrefix: "slipway-bbx-",
+        factoryId: "validator",
+        retentionSecondsMax: 3600,
+        maxRetainedBytesMax: 1_000_000,
+        maxIngestBytesPerMinuteMax: 1_000_000,
+        envName: "BLACKBOX_LOG_CONFIG",
+        spoolDir: "./blackbox-log-spool",
+        context: { application: "validator" }
+      },
+      lockbox: {
+        envName: "BLACKBOX_LOG_CONFIG",
+        uploadUrl: "https://lockbox.test/api/operator/blackbox-profiles"
+      }
+    }
+  };
+}
+
+function lockboxProfileUploadResponse(baseUrl: string, ownerPublicKey: string): Record<string, unknown> {
+  return {
+    ok: true,
+    replayed: false,
+    profile: {
+      profileId: "validator",
+      revision: `sha256:${"4".repeat(64)}`,
+      applicationId: "validator",
+      repository: "proof-computer/switchboard-validator",
+      profileName: "validator",
+      blackbox: {
+        baseUrl,
+        ownerPublicKey,
+        network: "acurast-mainnet",
+        sinkIdPrefix: "slipway-bbx-",
+        factoryId: "validator",
+        factoryTokenDigest: `sha256:${"5".repeat(64)}`,
+        retentionSecondsMax: 3600,
+        maxRetainedBytesMax: 1_000_000,
+        maxIngestBytesPerMinuteMax: 1_000_000,
+        envName: "BLACKBOX_LOG_CONFIG",
+        spoolDir: "./blackbox-log-spool",
+        contextDigest: `sha256:${"6".repeat(64)}`,
+        dekDigest: `sha256:${"7".repeat(64)}`
+      }
+    }
+  };
 }
 
 function jsonResponse(value: unknown, status = 200): Response {
