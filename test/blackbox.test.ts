@@ -545,6 +545,103 @@ describe("proof-cli Blackbox runner", () => {
     assert.equal(saved.profiles?.validator?.lockboxProfileRevision, `sha256:${"4".repeat(64)}`);
   });
 
+  it("forces a Slipway profile factory token rotation when local token state exists", async (t) => {
+    const harness = await createHarness(t);
+    const sessionFile = path.join(harness.dir, "ops-session.json");
+    const dek = fixedDek();
+    await writeFile(sessionFile, `${JSON.stringify({
+      slipwayUrl: "https://slipway.test",
+      sessionToken: "slipway-session-token"
+    })}\n`);
+    await mkdir(path.join(harness.dir, "home"), { recursive: true });
+    await writeFile(path.join(harness.dir, "home", "keys.json"), `${JSON.stringify({
+      version: 1,
+      sinks: {},
+      profiles: {
+        validator: {
+          name: "validator",
+          applicationId: "validator",
+          profileId: "validator",
+          baseUrl: harness.baseUrl,
+          owner: ownerPublicKeyHex,
+          dek,
+          factoryId: "validator",
+          factoryToken: `bbx_sf_validator_${"o".repeat(48)}`,
+          configuredAt: new Date(0).toISOString()
+        }
+      }
+    })}\n`);
+    const requests: Array<{ method: string; path: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+      const method = init?.method ?? "GET";
+      requests.push({ method, path: url.pathname });
+      if (url.hostname === "slipway.test" && method === "GET" && url.pathname === "/api/applications/validator/blackbox/configure-slipway-context") {
+        return jsonResponse(profileConfigureContext(harness.baseUrl));
+      }
+      if (url.hostname === "blackbox.test" && method === "POST" && url.pathname === "/v1/sink-factories") {
+        return jsonResponse({
+          replayed: true,
+          factory: {
+            factoryId: "validator",
+            owner: ownerPublicKeyHex,
+            applicationId: "validator",
+            network: "acurast-mainnet",
+            sinkIdPrefix: "slipway-bbx-"
+          }
+        });
+      }
+      if (url.hostname === "blackbox.test" && method === "POST" && url.pathname === "/v1/sink-factories/validator/token-rotations") {
+        return jsonResponse({
+          rotated: true,
+          factory: {
+            factoryId: "validator",
+            owner: ownerPublicKeyHex,
+            applicationId: "validator"
+          },
+          factoryToken: `bbx_sf_validator_${"n".repeat(48)}`
+        });
+      }
+      if (url.hostname === "lockbox.test" && method === "POST" && url.pathname === "/api/operator/blackbox-profiles") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { blackbox?: { factoryToken?: string; dek?: string } };
+        assert.equal(body.blackbox?.factoryToken, `bbx_sf_validator_${"n".repeat(48)}`);
+        assert.equal(body.blackbox?.dek, dek);
+        return jsonResponse(lockboxProfileUploadResponse(harness.baseUrl, ownerPublicKeyHex));
+      }
+      if (url.hostname === "slipway.test" && method === "POST" && url.pathname === "/api/applications/validator/blackbox/configure-slipway-profile-record") {
+        return jsonResponse({ ok: true, profile: { profileId: "validator", revision: `sha256:${"4".repeat(64)}` } });
+      }
+      return harness.fetchImpl(input, init);
+    };
+
+    const lines: string[] = [];
+    await runBlackboxCli([
+      "configure-slipway",
+      "validator",
+      "--slipway-config-file",
+      sessionFile,
+      "--rotate-factory-token",
+      "--json"
+    ], {
+      cwd: harness.dir,
+      env: {
+        ...harness.env,
+        PROOF_LOCKBOX_OPERATOR_UPLOAD_TOKEN: "lockbox-operator-token"
+      },
+      fetchImpl,
+      stdout: (line) => lines.push(line)
+    });
+
+    const parsed = JSON.parse(lines.join("\n")) as { localState?: { factoryTokenRotated?: boolean; factoryTokenSource?: string } };
+    assert.equal(parsed.localState?.factoryTokenRotated, true);
+    assert.equal(parsed.localState?.factoryTokenSource, "rotated");
+    assert.equal(requests.some((request) => request.path === "/v1/sink-factories/validator/token-rotations"), true);
+    const saved = JSON.parse(await readFile(path.join(harness.dir, "home", "keys.json"), "utf8")) as {
+      profiles?: Record<string, { factoryToken?: string }>;
+    };
+    assert.equal(saved.profiles?.validator?.factoryToken, `bbx_sf_validator_${"n".repeat(48)}`);
+  });
+
   it("reads profile-created sinks with a saved profile DEK and explicit sink id", async (t) => {
     const harness = await createHarness(t);
     const dek = fixedDek();

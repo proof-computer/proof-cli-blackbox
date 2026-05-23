@@ -1168,6 +1168,34 @@ async function ensureConfigureSlipwaySinkFactory(input: {
   ) {
     throw new Error("Blackbox sink factory response does not match the Slipway profile binding");
   }
+  if (input.rotateFactoryToken && !response.factoryToken) {
+    const rotated = await signedJson<{
+      factory?: {
+        factoryId?: string;
+        owner?: string;
+        applicationId?: string;
+      };
+      factoryToken?: string;
+      rotated?: boolean;
+    }>({
+      baseUrl: input.context.blackbox.baseUrl,
+      path: `/v1/sink-factories/${encodeURIComponent(input.context.blackbox.factoryId)}/token-rotations`,
+      method: "POST",
+      signer: input.signer,
+      fetchImpl: input.fetchImpl
+    });
+    if (
+      rotated.factory?.factoryId !== input.context.blackbox.factoryId ||
+      rotated.factory.applicationId !== input.context.applicationId ||
+      normalizePublicKeyHex(String(rotated.factory.owner ?? "")) !== normalizePublicKeyHex(input.signer.publicKeyHex) ||
+      typeof rotated.factoryToken !== "string" ||
+      rotated.factoryToken.length === 0
+    ) {
+      throw new Error("Blackbox sink factory token rotation response does not match the Slipway profile binding");
+    }
+    return { factoryToken: rotated.factoryToken, tokenSource: "rotated" };
+  }
+
   const token = response.factoryToken ?? (
     input.currentProfile?.factoryId === input.context.blackbox.factoryId &&
     normalizePublicKeyHex(input.currentProfile.owner) === normalizePublicKeyHex(input.signer.publicKeyHex)
@@ -1175,33 +1203,6 @@ async function ensureConfigureSlipwaySinkFactory(input: {
       : undefined
   );
   if (!token) {
-    if (input.rotateFactoryToken) {
-      const rotated = await signedJson<{
-        factory?: {
-          factoryId?: string;
-          owner?: string;
-          applicationId?: string;
-        };
-        factoryToken?: string;
-        rotated?: boolean;
-      }>({
-        baseUrl: input.context.blackbox.baseUrl,
-        path: `/v1/sink-factories/${encodeURIComponent(input.context.blackbox.factoryId)}/token-rotations`,
-        method: "POST",
-        signer: input.signer,
-        fetchImpl: input.fetchImpl
-      });
-      if (
-        rotated.factory?.factoryId !== input.context.blackbox.factoryId ||
-        rotated.factory.applicationId !== input.context.applicationId ||
-        normalizePublicKeyHex(String(rotated.factory.owner ?? "")) !== normalizePublicKeyHex(input.signer.publicKeyHex) ||
-        typeof rotated.factoryToken !== "string" ||
-        rotated.factoryToken.length === 0
-      ) {
-        throw new Error("Blackbox sink factory token rotation response does not match the Slipway profile binding");
-      }
-      return { factoryToken: rotated.factoryToken, tokenSource: "rotated" };
-    }
     throw new Error("Blackbox sink factory already exists but no local factory token is saved. Rerun from the original BLACKBOX_HOME/state-file, or rerun with --rotate-factory-token to recover future Slipway launches by rotating the factory token and uploading a replacement Lockbox profile. Existing logs remain readable only with the original DEK.");
   }
   return { factoryToken: token, tokenSource: response.factoryToken ? "created" : "local-state" };
