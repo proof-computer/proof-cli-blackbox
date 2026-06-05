@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, ownerUriEnvFlag, stateFileFlag } from "../../../command-helpers.js";
 import { runBlackboxReadTokenCreate } from "../../../runner.js";
@@ -6,7 +6,7 @@ import { runBlackboxReadTokenCreate } from "../../../runner.js";
 export default class BlackboxReadTokenCreate extends Command {
   static description = "Create and optionally save a Blackbox read or tail token.";
   static examples = ["<%= config.bin %> blackbox read-token create --name my-app --scope tail --json"];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,

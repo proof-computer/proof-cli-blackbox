@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, stateFileFlag } from "../../../command-helpers.js";
 import { runBlackboxAdminGrantCredit } from "../../../runner.js";
@@ -8,7 +8,7 @@ export default class BlackboxAdminGrantCredit extends Command {
   static examples = [
     "<%= config.bin %> blackbox admin grant-credit --base-url https://proof-blackbox.fly.dev --admin-token-env BLACKBOX_ADMIN_TOKEN --owner 0x... --amount 100000 --json"
   ];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,

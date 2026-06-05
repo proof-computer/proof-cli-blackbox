@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 export default class Blackbox extends Command {
   static description = [
@@ -11,7 +11,7 @@ export default class Blackbox extends Command {
     "<%= config.bin %> blackbox sinks create --base-url https://proof-blackbox.fly.dev --name my-app --job-id acurast:mainnet:12345",
     "<%= config.bin %> blackbox read --name my-app --limit 20"
   ];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" })
   };
   static id = "blackbox";

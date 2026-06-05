@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, ownerUriEnvFlag, stateFileFlag } from "../../command-helpers.js";
 import { runBlackboxTail } from "../../runner.js";
@@ -6,7 +6,7 @@ import { runBlackboxTail } from "../../runner.js";
 export default class BlackboxTail extends Command {
   static description = "Tail and locally decrypt live Blackbox log batches.";
   static examples = ["<%= config.bin %> blackbox tail --name my-app --limit 10 --timeout-ms 60000 --json"];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,

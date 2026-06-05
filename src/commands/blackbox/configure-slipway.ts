@@ -1,17 +1,17 @@
-import { Args, Command, Flags } from "@oclif/core";
+import { Args, Command, Flags, type Interfaces } from "@oclif/core";
 
 import { jsonFlag, nameFlag, ownerUriEnvFlag, stateFileFlag } from "../../command-helpers.js";
 import { runBlackboxConfigureSlipway } from "../../runner.js";
 
 export default class BlackboxConfigureSlipway extends Command {
-  static args = {
+  static args: Interfaces.ArgInput = {
     applicationId: Args.string({ description: "Shared PROOF Application id.", required: true })
   };
   static description = "Configure Blackbox logging for a Slipway-backed PROOF Application.";
   static examples = [
     "<%= config.bin %> blackbox configure-slipway switchboard-validator --slipway-url https://slipway.fly.dev --lockbox-url https://lockbox.fly.dev --json"
   ];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "slipway-url": Flags.string({ description: "Slipway API base URL." }),
     "slipway-session-token-env": Flags.string({ description: "Environment variable containing the Slipway session token." }),

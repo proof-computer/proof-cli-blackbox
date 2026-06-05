@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, ownerUriEnvFlag, stateFileFlag } from "../../../command-helpers.js";
 import { runBlackboxSinksCreate } from "../../../runner.js";
@@ -8,7 +8,7 @@ export default class BlackboxSinksCreate extends Command {
   static examples = [
     "<%= config.bin %> blackbox sinks create --base-url https://proof-blackbox.fly.dev --name my-app --job-id acurast:mainnet:12345 --env-file .blackbox/my-app.env"
   ];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,

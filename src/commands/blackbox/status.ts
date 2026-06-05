@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, stateFileFlag } from "../../command-helpers.js";
 import { runBlackboxStatus } from "../../runner.js";
@@ -6,7 +6,7 @@ import { runBlackboxStatus } from "../../runner.js";
 export default class BlackboxStatus extends Command {
   static description = "Read Blackbox service health and optional admin status.";
   static examples = ["<%= config.bin %> blackbox status --base-url https://proof-blackbox.fly.dev --json"];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,

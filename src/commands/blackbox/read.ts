@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oclif/core";
+import { Command, Flags, type Interfaces } from "@oclif/core";
 
 import { baseUrlFlag, jsonFlag, manifestSignerFlag, manifestUrlFlag, nameFlag, ownerUriEnvFlag, stateFileFlag } from "../../command-helpers.js";
 import { runBlackboxRead } from "../../runner.js";
@@ -6,7 +6,7 @@ import { runBlackboxRead } from "../../runner.js";
 export default class BlackboxRead extends Command {
   static description = "Read and locally decrypt Blackbox log batches.";
   static examples = ["<%= config.bin %> blackbox read --name my-app --limit 20 --json"];
-  static flags = {
+  static flags: Interfaces.FlagInput = {
     help: Flags.help({ char: "h" }),
     "base-url": baseUrlFlag,
     "manifest-url": manifestUrlFlag,
