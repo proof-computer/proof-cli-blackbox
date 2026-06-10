@@ -1,6 +1,6 @@
 {
   "name": "@proof-computer/proof-cli-blackbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Blackbox plugin for the PROOF command line interface.",
   "private": false,
   "type": "module",

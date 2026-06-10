@@ -16,6 +16,8 @@ export default class BlackboxTail extends Command {
     "state-file": stateFileFlag,
     "owner-uri-env": ownerUriEnvFlag,
     "sink-id": Flags.string({ description: "Sink id." }),
+    "job-id": Flags.string({ description: "Select the factory job sink for this Acurast job id." }),
+    "deployment-id": Flags.string({ description: "Select the factory job sink for this Acurast deployment id." }),
     limit: Flags.string({ description: "Maximum number of batches." }),
     "timeout-ms": Flags.string({ description: "Tail timeout in milliseconds." }),
     dek: Flags.string({ description: "Base64url Blackbox log DEK." }),

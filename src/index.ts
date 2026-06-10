@@ -10,6 +10,7 @@ export {
   runBlackboxReadTokenRevoke,
   runBlackboxSearch,
   runBlackboxSinksCreate,
+  runBlackboxSinksList,
   runBlackboxStatus,
   runBlackboxTail,
   type BlackboxCliFlags,

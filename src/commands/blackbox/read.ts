@@ -17,6 +17,7 @@ export default class BlackboxRead extends Command {
     "owner-uri-env": ownerUriEnvFlag,
     "sink-id": Flags.string({ description: "Sink id." }),
     "job-id": Flags.string({ description: "Filter by Acurast job id." }),
+    "deployment-id": Flags.string({ description: "Select the factory job sink for this Acurast deployment id." }),
     "after-sequence": Flags.string({ description: "Read after this sequence." }),
     limit: Flags.string({ description: "Maximum number of batches." }),
     dek: Flags.string({ description: "Base64url Blackbox log DEK." }),

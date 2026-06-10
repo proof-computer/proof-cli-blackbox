@@ -11,9 +11,10 @@ proof plugins install @proof-computer/proof-cli-blackbox
 proof blackbox --help
 ```
 
-The standalone `blackbox` binary remains supported by the Blackbox repo during
-the migration and delegates through a compatibility adapter to the same
-command-specific runners.
+The standalone `blackbox` binary in the private Blackbox repo is
+maintenance-only. It contains no command implementation; it imports this
+package and delegates through `runBlackboxCli`. New Blackbox CLI work belongs
+in this oclif plugin.
 
 ## Common Flow
 
@@ -65,9 +66,21 @@ proof blackbox configure-slipway switchboard-validator \
   --json
 ```
 
-After Slipway materializes a per-job profile sink, use the sink id from the
-Slipway `blackbox.configure` plan item or execution record with the saved
-profile DEK:
+With the factory-token model the runtime self-creates its job-bound sink, so
+reads resolve it automatically from the saved profile: `read`/`search`/`tail`
+with `--name <app>` and no `--sink-id` list the owner's sinks under the
+profile's factory and pick the newest active one (or the one matching
+`--job-id`/`--deployment-id`). The chosen sink is reported as `resolvedSink`.
+
+```fish
+proof blackbox sinks list --name switchboard-validator
+proof blackbox read --name switchboard-validator --limit 20 --json
+proof blackbox tail --name switchboard-validator --timeout-ms 60000
+proof blackbox read --name switchboard-validator --deployment-id 76976 --json
+```
+
+An explicit `--sink-id` (for example from a Slipway `blackbox.configure` plan
+item or execution record) still takes precedence:
 
 ```fish
 proof blackbox read --name switchboard-validator --sink-id slipway-bbx-... --json

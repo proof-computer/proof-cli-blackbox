@@ -17,6 +17,7 @@ export default class BlackboxSearch extends Command {
     "owner-uri-env": ownerUriEnvFlag,
     "sink-id": Flags.string({ description: "Sink id." }),
     "job-id": Flags.string({ description: "Filter by Acurast job id." }),
+    "deployment-id": Flags.string({ description: "Select the factory job sink for this Acurast deployment id." }),
     "batch-id": Flags.string({ description: "Filter by batch id." }),
     "received-after": Flags.string({ description: "Filter by received-at lower bound." }),
     "received-before": Flags.string({ description: "Filter by received-at upper bound." }),

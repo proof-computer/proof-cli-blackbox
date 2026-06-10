@@ -248,6 +248,9 @@ export async function runBlackboxCli(argv = process.argv.slice(2), options: Blac
     case "sinks-create":
       await runBlackboxSinksCreate({ flags: parsed.flags }, options);
       return;
+    case "sinks-list":
+      await runBlackboxSinksList({ flags: parsed.flags }, options);
+      return;
     case "configure-slipway":
       await runBlackboxConfigureSlipway({
         applicationId: requiredPositional(parsed, 1, "APPLICATION_ID"),
@@ -299,6 +302,10 @@ export async function runBlackboxAdminGrantCredit(input: BlackboxNativeCommandIn
 
 export async function runBlackboxSinksCreate(input: BlackboxNativeCommandInput = {}, options: BlackboxCliOptions = {}): Promise<void> {
   await sinksCreateCommand(parsedCommandInput(["sinks", "create"], input.flags), options);
+}
+
+export async function runBlackboxSinksList(input: BlackboxNativeCommandInput = {}, options: BlackboxCliOptions = {}): Promise<void> {
+  await sinksListCommand(parsedCommandInput(["sinks", "list"], input.flags), options);
 }
 
 export async function runBlackboxConfigureSlipway(
@@ -880,6 +887,58 @@ async function readTokenRevokeCommand(parsed: ParsedArgs, options: BlackboxCliOp
   output(parsed, options, result, `Revoked token ${tokenId}`);
 }
 
+async function sinksListCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Promise<void> {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const name = stateName(parsed.flags);
+  const state = await maybeLoadSinkState(cwd, name, parsed.flags, env);
+  const profile = state ? undefined : await maybeLoadProfileState(name, parsed.flags, env);
+  const baseUrl = await resolveBlackboxCliBaseUrl({ flags: parsed.flags, env, cwd, state: state ?? profile, fetchImpl });
+  const signer = await ownerSigner(parsed.flags, env);
+  const jobId = stringFlag(parsed.flags, "job-id");
+  const deploymentId = stringFlag(parsed.flags, "deployment-id");
+
+  let sinks: ResolvedFactoryJobSink[];
+  if (profile) {
+    sinks = await listFactoryJobSinks({
+      baseUrl,
+      signer,
+      fetchImpl,
+      factoryId: profile.factoryId,
+      applicationId: profile.applicationId
+    });
+  } else {
+    const listed = await signedJson<{ sinks?: Array<ResolvedFactoryJobSink & { sinkId?: string }> }>({
+      baseUrl,
+      path: "/v1/sinks",
+      method: "GET",
+      signer,
+      fetchImpl
+    });
+    sinks = (listed.sinks ?? [])
+      .filter((sink): sink is ResolvedFactoryJobSink => typeof sink.sinkId === "string")
+      .sort((left, right) => (right.createdAtMs ?? 0) - (left.createdAtMs ?? 0));
+  }
+  sinks = sinks
+    .filter((sink) => jobId === undefined || sink.jobId === jobId || Boolean(sink.jobId?.includes(jobId)))
+    .filter((sink) => deploymentId === undefined || sink.deploymentId === deploymentId);
+
+  const summary = sinks.length === 0
+    ? "No sinks found"
+    : sinks.map((sink) => {
+      const parts = [
+        sink.sinkId,
+        sink.jobId ? `job=${sink.jobId}` : undefined,
+        sink.deploymentId ? `deployment=${sink.deploymentId}` : undefined,
+        sink.status ? `status=${sink.status}` : undefined,
+        sink.createdAtMs ? `created=${new Date(sink.createdAtMs).toISOString()}` : undefined
+      ].filter(Boolean);
+      return parts.join(" ");
+    }).join("\n");
+  output(parsed, options, { sinks, ...(profile ? { factoryId: profile.factoryId, name: profile.name } : {}) }, summary);
+}
+
 async function readCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Promise<void> {
   const reader = await readerContext(parsed, options);
   const result = await reader.reader.readBatches({
@@ -887,7 +946,12 @@ async function readCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Pro
     afterSequence: optionalNumberFlag(parsed.flags, "after-sequence"),
     limit: optionalNumberFlag(parsed.flags, "limit")
   });
-  output(parsed, options, result, `${result.batches.length} batch(es)`);
+  output(
+    parsed,
+    options,
+    reader.resolvedSink ? { ...result, resolvedSink: reader.resolvedSink } : result,
+    `${result.batches.length} batch(es)${sinkSummarySuffix(reader.resolvedSink)}`
+  );
 }
 
 async function searchCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Promise<void> {
@@ -902,7 +966,12 @@ async function searchCommand(parsed: ParsedArgs, options: BlackboxCliOptions): P
     limit: optionalNumberFlag(parsed.flags, "limit"),
     labels: labelFlags(parsed.flags)
   });
-  output(parsed, options, result, `${result.batches.length} batch(es), scanned ${result.scannedBytes} bytes`);
+  output(
+    parsed,
+    options,
+    reader.resolvedSink ? { ...result, resolvedSink: reader.resolvedSink } : result,
+    `${result.batches.length} batch(es), scanned ${result.scannedBytes} bytes${sinkSummarySuffix(reader.resolvedSink)}`
+  );
 }
 
 async function tailCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Promise<void> {
@@ -927,7 +996,12 @@ async function tailCommand(parsed: ParsedArgs, options: BlackboxCliOptions): Pro
   } finally {
     clearTimeout(timeout);
   }
-  output(parsed, options, { batches }, `${batches.length} tail batch(es)`);
+  output(
+    parsed,
+    options,
+    reader.resolvedSink ? { batches, resolvedSink: reader.resolvedSink } : { batches },
+    `${batches.length} tail batch(es)${sinkSummarySuffix(reader.resolvedSink)}`
+  );
 }
 
 interface CommandContext {
@@ -951,6 +1025,7 @@ async function commandContext(parsed: ParsedArgs, options: BlackboxCliOptions): 
 
 async function readerContext(parsed: ParsedArgs, options: BlackboxCliOptions): Promise<{
   reader: ReturnType<typeof createBlackboxReader>;
+  resolvedSink?: ResolvedFactoryJobSink;
 }> {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
@@ -959,10 +1034,28 @@ async function readerContext(parsed: ParsedArgs, options: BlackboxCliOptions): P
   const state = await maybeLoadSinkState(cwd, name, parsed.flags, env);
   const profile = state ? undefined : await maybeLoadProfileState(name, parsed.flags, env);
   const baseUrl = await resolveBlackboxCliBaseUrl({ flags: parsed.flags, env, cwd, state: state ?? profile, fetchImpl });
-  const sinkId = resolveSinkId(parsed.flags, state);
   const dek = resolveDek(parsed.flags, env, state ?? profile);
   const readToken = resolveReadToken(parsed.flags, env, state);
   const signer = readToken ? undefined : await ownerSigner(parsed.flags, env);
+  let sinkId = stringFlag(parsed.flags, "sink-id") ?? state?.sinkId;
+  let resolvedSink: ResolvedFactoryJobSink | undefined;
+  if (!sinkId && profile && signer) {
+    // Factory model: the runtime self-creates job-bound sinks, so local state has
+    // no sinkId. Resolve the app's job sink from the service instead of failing.
+    resolvedSink = await resolveFactoryJobSink({
+      baseUrl,
+      signer,
+      fetchImpl,
+      factoryId: profile.factoryId,
+      applicationId: profile.applicationId,
+      jobId: stringFlag(parsed.flags, "job-id"),
+      deploymentId: stringFlag(parsed.flags, "deployment-id")
+    });
+    sinkId = resolvedSink.sinkId;
+  }
+  if (!sinkId) {
+    sinkId = resolveSinkId(parsed.flags, state);
+  }
   return {
     reader: createBlackboxReader({
       baseUrl,
@@ -971,8 +1064,84 @@ async function readerContext(parsed: ParsedArgs, options: BlackboxCliOptions): P
       readToken,
       signer,
       fetch: fetchImpl
-    })
+    }),
+    resolvedSink
   };
+}
+
+interface ResolvedFactoryJobSink {
+  sinkId: string;
+  jobId?: string;
+  deploymentId?: string;
+  status?: string;
+  createdAtMs?: number;
+}
+
+async function resolveFactoryJobSink(input: {
+  baseUrl: string;
+  signer: BlackboxRequestSigner;
+  fetchImpl: typeof fetch;
+  factoryId: string;
+  applicationId: string;
+  jobId?: string;
+  deploymentId?: string;
+}): Promise<ResolvedFactoryJobSink> {
+  const candidates = await listFactoryJobSinks(input);
+  const filtered = candidates
+    .filter((sink) => input.jobId === undefined || sink.jobId === input.jobId || Boolean(sink.jobId?.includes(input.jobId)))
+    .filter((sink) => input.deploymentId === undefined || sink.deploymentId === input.deploymentId);
+  const selected = filtered[0];
+  if (!selected) {
+    const filters = [
+      input.jobId ? `job ${input.jobId}` : undefined,
+      input.deploymentId ? `deployment ${input.deploymentId}` : undefined
+    ].filter(Boolean).join(", ");
+    throw new Error(
+      `No ${input.applicationId} job sinks found for factory ${input.factoryId}${filters ? ` matching ${filters}` : ""}; ` +
+      "the runtime may not have self-registered yet (pass --sink-id to read an explicit sink)"
+    );
+  }
+  return selected;
+}
+
+async function listFactoryJobSinks(input: {
+  baseUrl: string;
+  signer: BlackboxRequestSigner;
+  fetchImpl: typeof fetch;
+  factoryId: string;
+  applicationId: string;
+}): Promise<ResolvedFactoryJobSink[]> {
+  const factories = await signedJson<{ factories?: Array<{ factoryId?: string; sinkIdPrefix?: string }> }>({
+    baseUrl: input.baseUrl,
+    path: "/v1/sink-factories",
+    method: "GET",
+    signer: input.signer,
+    fetchImpl: input.fetchImpl
+  });
+  const factory = factories.factories?.find((candidate) => candidate.factoryId === input.factoryId);
+  if (!factory?.sinkIdPrefix) {
+    throw new Error(
+      `Blackbox sink factory ${input.factoryId} was not found for this owner; ` +
+      `cannot resolve ${input.applicationId} job sinks (pass --sink-id explicitly)`
+    );
+  }
+  const sinkIdPrefix = factory.sinkIdPrefix;
+  const listed = await signedJson<{ sinks?: Array<ResolvedFactoryJobSink & { sinkId?: string }> }>({
+    baseUrl: input.baseUrl,
+    path: "/v1/sinks",
+    method: "GET",
+    signer: input.signer,
+    fetchImpl: input.fetchImpl
+  });
+  return (listed.sinks ?? [])
+    .filter((sink): sink is ResolvedFactoryJobSink => typeof sink.sinkId === "string" && sink.sinkId.startsWith(sinkIdPrefix))
+    .filter((sink) => sink.status === undefined || sink.status === "active")
+    .sort((left, right) => (right.createdAtMs ?? 0) - (left.createdAtMs ?? 0));
+}
+
+function sinkSummarySuffix(resolved: ResolvedFactoryJobSink | undefined): string {
+  if (!resolved) return "";
+  return ` from sink ${resolved.sinkId}${resolved.jobId ? ` (job ${resolved.jobId})` : ""}`;
 }
 
 export async function resolveBlackboxCliBaseUrl(input: {
@@ -1676,6 +1845,7 @@ function normalizeCommand(positionals: string[]): string {
   if (positionals.length === 0) return "help";
   if (positionals[0] === "admin" && positionals[1] === "grant-credit") return "admin-grant-credit";
   if (positionals[0] === "sinks" && positionals[1] === "create") return "sinks-create";
+  if (positionals[0] === "sinks" && positionals[1] === "list") return "sinks-list";
   if (positionals[0] === "configure-slipway") return "configure-slipway";
   if (positionals[0] === "read-token" && positionals[1] === "create") return "read-token-create";
   if (positionals[0] === "read-token" && positionals[1] === "list") return "read-token-list";
@@ -1790,10 +1960,13 @@ function helpText(): string {
   blackbox admin grant-credit --base-url <url> --admin-token-env <ENV> --owner <hex> --amount <atomic>
   blackbox configure-slipway <APPLICATION_ID>
   blackbox sinks create --base-url <url> --name <name> --job-id <id> [--env-file <path>]
+  blackbox sinks list [--name <name>] [--job-id <id>] [--deployment-id <id>]
   blackbox read-token create|list|revoke --name <name>
   blackbox read|search|tail --name <name>
 
 State is stored in --state-file or BLACKBOX_HOME/keys.json, defaulting to ~/.blackbox/keys.json.
 Legacy cwd .blackbox/sinks/<name>.json files remain readable.
-Owner-signed commands read BLACKBOX_OWNER_URI by default. Blackbox is optional and standalone; this CLI does not alter switchboard deploy defaults.`;
+Owner-signed commands read BLACKBOX_OWNER_URI by default.
+User-facing Blackbox CLI work lives in the PROOF oclif plugin: proof blackbox --help.
+The standalone blackbox bin is a maintenance wrapper over this package.`;
 }

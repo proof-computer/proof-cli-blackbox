@@ -157,6 +157,71 @@ describe("proof-cli Blackbox runner", () => {
     assert.equal(tail.batches[0]?.records[0]?.event, "boot");
   });
 
+  it("auto-resolves factory job sinks for profile reads and lists them", async (t) => {
+    const harness = await createHarness(t);
+    const dek = fixedDek();
+    harness.batch = makeBatch(dek);
+
+    const statePath = path.join(harness.dir, "home", "keys.json");
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({
+      version: 1,
+      sinks: {},
+      profiles: {
+        validator: {
+          name: "validator",
+          applicationId: "switchboard-validator",
+          repository: "proof-computer/switchboard-validator",
+          policyDigest: "0x00",
+          profileId: "profile-1",
+          baseUrl: harness.baseUrl,
+          owner: ownerPublicKeyHex,
+          dek,
+          factoryId: "factory-1",
+          factoryToken: `bbx_sf_factory-1_${"a".repeat(48)}`,
+          configuredAt: new Date(0).toISOString()
+        }
+      }
+    }, null, 2));
+
+    const factorySinks = [
+      { sinkId: "slipway-bbx-job-old", jobId: "76900", deploymentId: "76900", status: "active", createdAtMs: 1000 },
+      { sinkId: "slipway-bbx-job-new", jobId: "76976", deploymentId: "76976", status: "active", createdAtMs: 2000 },
+      { sinkId: "other-prefix-job", jobId: "1", status: "active", createdAtMs: 3000 }
+    ];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname === "/v1/sink-factories") {
+        return jsonResponse({ factories: [{ factoryId: "factory-1", sinkIdPrefix: "slipway-bbx-" }] });
+      }
+      if (method === "GET" && url.pathname === "/v1/sinks") {
+        return jsonResponse({ sinks: factorySinks });
+      }
+      return harness.fetchImpl(input as never, init);
+    }) as typeof fetch;
+
+    const read = await runJson({ ...harness, fetchImpl }, ["read", "--name", "validator"]) as {
+      batches: Array<{ records: Array<{ event: string }> }>;
+      resolvedSink: { sinkId: string; jobId: string };
+    };
+    assert.equal(read.resolvedSink.sinkId, "slipway-bbx-job-new");
+    assert.equal(read.resolvedSink.jobId, "76976");
+    assert.equal(read.batches[0]?.records[0]?.event, "boot");
+
+    const pinned = await runJson({ ...harness, fetchImpl }, ["read", "--name", "validator", "--deployment-id", "76900"]) as {
+      resolvedSink: { sinkId: string };
+    };
+    assert.equal(pinned.resolvedSink.sinkId, "slipway-bbx-job-old");
+
+    const listed = await runJson({ ...harness, fetchImpl }, ["sinks", "list", "--name", "validator"]) as {
+      sinks: Array<{ sinkId: string }>;
+      factoryId: string;
+    };
+    assert.deepEqual(listed.sinks.map((sink) => sink.sinkId), ["slipway-bbx-job-new", "slipway-bbx-job-old"]);
+    assert.equal(listed.factoryId, "factory-1");
+  });
+
   it("requires an explicit admin token env for private credit grants", async (t) => {
     const harness = await createHarness(t);
     await assert.rejects(
@@ -172,6 +237,13 @@ describe("proof-cli Blackbox runner", () => {
           "1000"
         ]),
       /requires explicit --admin-token-env/
+    );
+  });
+
+  it("fails unknown standalone-wrapper commands instead of silently accepting them", async () => {
+    await assert.rejects(
+      () => runBlackboxCli(["legacy", "command"]),
+      /Unknown blackbox command: legacy command/u
     );
   });
 
